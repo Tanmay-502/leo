@@ -5,14 +5,24 @@
 # -> forms a final answer. This is what makes Leo "agentic" instead of just a chatbot.
 
 import os
-from dotenv import load_dotenv                # reads our .env file so we don't hardcode secrets
+from dotenv import load_dotenv
 from langgraph.graph import StateGraph, MessagesState, END, START
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_groq import ChatGroq
+from langchain_core.messages import SystemMessage
 
-from core.tools import ALL_TOOLS               # import our list of tools from tools.py
+from core.tools import ALL_TOOLS
 
-load_dotenv()  # loads GROQ_API_KEY from .env into the environment
+load_dotenv()
+
+# This system prompt is critical — small/fast models like llama-3.1-8b-instant
+# sometimes "forget" to use tools and just guess instead. Explicitly telling it
+# to prefer tools fixes this in most cases.
+SYSTEM_PROMPT = (
+    "You are Leo, a voice assistant. Always use tools for weather, search, news, "
+    "calendar, email, or apps — never guess real data. After a tool runs, state the "
+    "actual result naturally (e.g. 'It's 27°C in Indore'), never mention tool names."
+)
 
 
 def build_leo():
@@ -22,24 +32,17 @@ def build_leo():
     if not api_key:
         raise ValueError("GROQ_API_KEY not found in .env")
 
-    # llama-3.1-8b-instant = fast + free on Groq, good enough for tool-calling/routing
-    # max_retries=0 stops the SDK from silently retrying many times on its own on a 429
-    llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0, max_retries=0)
-
-    # This "attaches" our tools to the LLM so it knows what functions exist and their signatures
+    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, max_retries=0)
     llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
     def brain_node(state: MessagesState):
-        # Single attempt only — no retry loop. If we hit a rate limit, it fails
-        # clearly right away instead of hammering the API repeatedly.
-        response = llm_with_tools.invoke(state["messages"])
+        messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+        response = llm_with_tools.invoke(messages)
         return {"messages": [response]}
 
-    # ---- Building the graph ----
     graph = StateGraph(MessagesState)
-
-    graph.add_node("brain", brain_node)          # the LLM thinking step
-    graph.add_node("tools", ToolNode(ALL_TOOLS))  # the step that actually RUNS a tool if called
+    graph.add_node("brain", brain_node)
+    graph.add_node("tools", ToolNode(ALL_TOOLS))
 
     graph.add_edge(START, "brain")
     graph.add_conditional_edges("brain", tools_condition)
