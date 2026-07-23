@@ -29,28 +29,37 @@ LEO_VOICE = "en-US-GuyNeural"
 SAMPLE_RATE = 16000  # 16kHz is what Whisper expects
 
 
-def listen(duration=5):
+def listen(duration=6):
     """
     Records audio from the microphone for `duration` seconds,
     then converts it to text using faster-whisper.
-    Returns the transcribed text as a string.
+    Returns the transcribed text as a string, or "" if silence was detected.
     """
-    print(f"\n[Listening for {duration} seconds... speak now]")
+    import time
+    print(f"\n[Get ready...]")
+    time.sleep(0.5)
+    print(f"[Listening for {duration} seconds — speak now]")
 
-    # Record audio from the default mic
     audio = sd.rec(int(duration * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype="float32")
-    sd.wait()  # blocks here until recording finishes
+    sd.wait()
 
-    # faster-whisper expects a 1D numpy array — flatten just in case
     audio = audio.flatten()
 
-    # Run speech-to-text on the recorded audio
+    # SILENCE CHECK: Whisper often hallucinates words like "You" or "Thank you"
+    # when given near-silent audio. We measure the audio's volume (RMS) and
+    # skip transcription entirely if it's too quiet to be real speech.
+    volume = np.sqrt(np.mean(audio**2))
+    SILENCE_THRESHOLD = 0.01  # tune this if it's too sensitive or not sensitive enough
+
+    if volume < SILENCE_THRESHOLD:
+        print("[Silence detected — skipping]")
+        return ""
+
     segments, _ = _stt_model.transcribe(audio, language="en")
     text = " ".join(segment.text for segment in segments).strip()
 
     print(f"[You said]: {text}")
     return text
-
 
 def speak(text: str):
     """
@@ -88,3 +97,4 @@ if __name__ == "__main__":
         speak(f"You said: {text}")
     else:
         print("[No speech detected]")
+
