@@ -7,7 +7,7 @@
 import os
 import requests
 from langchain_core.tools import tool
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 import feedparser
 
 # =========================================================
