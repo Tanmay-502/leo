@@ -1,18 +1,26 @@
 # core/voice_loop.py
-# This is Leo's full VOICE experience — it wires together:
-#   core/voice.py  (ears + mouth)
-#   core/agent.py  (brain)
-# into one continuous loop: listen -> think -> speak -> repeat.
-#
-# We keep this separate from agent.py's text-mode __main__ block so you can
-# still run `python -m core.agent` for fast text-only debugging without a mic.
+# Leo's full voice experience: listen -> think -> speak -> repeat.
+# New in this version: Leo gives a quick spoken acknowledgment BEFORE
+# the tool finishes running, so it doesn't feel like dead silence while
+# it's fetching weather/searching/etc — same trick Siri/Alexa use.
 
 from core.agent import build_leo
 from core.voice import listen, speak
 
+# Quick, natural filler lines Leo can say WHILE it's about to do something.
+# Doesn't need to be tool-specific — a generic "on it" beats silence.
+THINKING_PHRASES = [
+    "Sure, one moment.",
+    "Got it, checking now.",
+    "Okay, let me check.",
+    "On it.",
+]
+
+import random
+
 def run_voice_loop():
     leo = build_leo()
-    conversation = []  # holds full chat history so Leo remembers context across turns
+    conversation = []
 
     speak("Leo is online. How can I help you?")
     print("Leo is listening. Say 'quit' or 'stop' to exit.\n")
@@ -21,7 +29,6 @@ def run_voice_loop():
         user_input = listen(duration=6)
 
         if not user_input:
-            # Nothing was heard (silence, background noise) — skip this turn, listen again
             continue
 
         if user_input.lower().strip() in ("quit", "stop", "exit"):
@@ -30,12 +37,15 @@ def run_voice_loop():
 
         conversation.append({"role": "user", "content": user_input})
 
+        # Speak a quick filler BEFORE the LLM call — makes the pause feel natural
+        # instead of dead silence while a tool (weather/search/etc) is running.
+        speak(random.choice(THINKING_PHRASES))
+
         try:
             result = leo.invoke({"messages": conversation})
             conversation = result["messages"]
             ai_reply = conversation[-1].content
         except Exception as e:
-            # If Groq rate-limits or errors, tell the user out loud instead of crashing silently
             ai_reply = "Sorry, I'm having trouble thinking right now. Please try again in a moment."
             print(f"[Error]: {e}")
 

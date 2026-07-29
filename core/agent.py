@@ -1,38 +1,31 @@
 # core/agent.py
-# This is Leo's BRAIN — built as a LangGraph "state graph" instead of a simple function call.
-# Why a graph instead of just calling the LLM directly?
-# Because a graph lets us define a LOOP: brain thinks -> maybe uses a tool -> comes back to brain
-# -> forms a final answer. This is what makes Leo "agentic" instead of just a chatbot.
+# Leo's BRAIN — LangGraph state graph, running on Ollama (local, offline, free).
+#
+# TEMPORARY TEST: using only 4 tools (TEST_TOOLS) instead of all 9, testing
+# phi3:mini as it's known for better instruction-following at small size.
+# Also added a hardcoded greeting shortcut — no reason to risk the LLM
+# misfiring a tool on something as simple as "Hello".
 
-import os
-from dotenv import load_dotenv
 from langgraph.graph import StateGraph, MessagesState, END, START
 from langgraph.prebuilt import ToolNode, tools_condition
-from langchain_groq import ChatGroq
+from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage
 
 from core.tools import ALL_TOOLS
 
-load_dotenv()
-
-# This system prompt is critical — small/fast models like llama-3.1-8b-instant
-# sometimes "forget" to use tools and just guess instead. Explicitly telling it
-# to prefer tools fixes this in most cases.
 SYSTEM_PROMPT = (
-    "You are Leo, a voice assistant. Always use tools for weather, search, news, "
-    "calendar, email, or apps — never guess real data. After a tool runs, state the "
-    "actual result naturally (e.g. 'It's 27°C in Indore'), never mention tool names."
+    "You are Leo, a voice assistant. For greetings or general chat, just reply normally — "
+    "do NOT use any tool. Only use a tool when the user explicitly asks for weather, "
+    "search, calendar, or to open an app. Never bring up unrelated topics."
 )
+
+# Greetings get answered directly in Python — zero chance of the model
+# misfiring a tool call on something this simple.
+SIMPLE_GREETINGS = ("hello", "hi", "hey", "how are you", "good morning", "good evening")
 
 
 def build_leo():
-    """Builds and compiles Leo's LangGraph brain. Returns a runnable graph."""
-
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        raise ValueError("GROQ_API_KEY not found in .env")
-
-    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, max_retries=0)
+    llm = ChatOllama(model="llama3.2", temperature=0)
     llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
     def brain_node(state: MessagesState):
@@ -54,13 +47,17 @@ def build_leo():
 if __name__ == "__main__":
     leo = build_leo()
 
-    print("Leo is online. Type 'quit' to exit.\n")
+    print("Leo is online (offline via Ollama, llama3.2). Type 'quit' to exit.\n")
     conversation = []
 
     while True:
         user_input = input("You: ")
         if user_input.lower() == "quit":
             break
+
+        if user_input.lower().strip() in SIMPLE_GREETINGS:
+            print("Leo: Hey! How can I help you today?\n")
+            continue
 
         conversation.append({"role": "user", "content": user_input})
         result = leo.invoke({"messages": conversation})
