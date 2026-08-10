@@ -1,22 +1,13 @@
 # core/voice_loop.py
 # Leo's full voice experience: listen -> think -> speak -> repeat.
-# New in this version: Leo gives a quick spoken acknowledgment BEFORE
-# the tool finishes running, so it doesn't feel like dead silence while
-# it's fetching weather/searching/etc — same trick Siri/Alexa use.
+# Includes the greeting shortcut (same as text mode) and a safety net that
+# catches broken/empty/raw-JSON responses so Leo never speaks garbage.
 
 from core.agent import build_leo
 from core.voice import listen, speak
 
-# Quick, natural filler lines Leo can say WHILE it's about to do something.
-# Doesn't need to be tool-specific — a generic "on it" beats silence.
-THINKING_PHRASES = [
-    "Sure, one moment.",
-    "Got it, checking now.",
-    "Okay, let me check.",
-    "On it.",
-]
+SIMPLE_GREETINGS = ("hello", "hi", "hey", "how are you", "good morning", "good evening")
 
-import random
 
 def run_voice_loop():
     leo = build_leo()
@@ -31,22 +22,32 @@ def run_voice_loop():
         if not user_input:
             continue
 
-        if user_input.lower().strip() in ("quit", "stop", "exit"):
+        cleaned = user_input.lower().strip().rstrip(".!?")
+
+        if cleaned in ("quit", "stop", "exit"):
             speak("Goodbye!")
             break
 
-        conversation.append({"role": "user", "content": user_input})
+        if cleaned in SIMPLE_GREETINGS:
+            reply = "Hey! How can I help you today?"
+            print(f"Leo: {reply}\n")
+            speak(reply)
+            continue
 
-        # Speak a quick filler BEFORE the LLM call — makes the pause feel natural
-        # instead of dead silence while a tool (weather/search/etc) is running.
-        speak(random.choice(THINKING_PHRASES))
+        conversation.append({"role": "user", "content": user_input})
 
         try:
             result = leo.invoke({"messages": conversation})
             conversation = result["messages"]
             ai_reply = conversation[-1].content
+
+            # Safety net: catch empty replies AND raw tool-call JSON leaking
+            # through instead of a real sentence — never speak either of those.
+            if not ai_reply or not ai_reply.strip() or ai_reply.strip().startswith("{"):
+                ai_reply = "Sorry, I didn't catch that clearly. Could you repeat it?"
+
         except Exception as e:
-            ai_reply = "Sorry, I'm having trouble thinking right now. Please try again in a moment."
+            ai_reply = "Sorry, I'm having trouble thinking right now."
             print(f"[Error]: {e}")
 
         print(f"Leo: {ai_reply}\n")
