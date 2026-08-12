@@ -9,20 +9,81 @@ import requests
 from langchain_core.tools import tool
 from ddgs import DDGS
 import feedparser
+from datetime import datetime, timedelta
+from googleapiclient.discovery import build
+from core.google_auth import get_google_credentials
 
-# =========================================================
 # PRODUCTIVITY TOOLS (stubs — real Google API comes later)
-# =========================================================
 
 @tool
 def check_calendar(time_range: str = "today"):
     """Check calendar for a time range like 'today' or 'tomorrow'."""
-    return f"[STUB] 2 meetings {time_range}: Standup 10AM, Project Sync 3PM."
+    try:
+        creds = get_google_credentials()
+        service = build("calendar", "v3", credentials=creds)
+
+        # Figure out the date window based on what the user asked for
+        now = datetime.utcnow()
+        if "tomorrow" in time_range.lower():
+            start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif "week" in time_range.lower():
+            start = now
+        else:  # default to "today"
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        end = start + timedelta(days=7 if "week" in time_range.lower() else 1)
+
+        events_result = service.events().list(
+            calendarId="primary",
+            timeMin=start.isoformat() + "Z",
+            timeMax=end.isoformat() + "Z",
+            singleEvents=True,
+            orderBy="startTime",
+        ).execute()
+
+        events = events_result.get("items", [])
+
+        if not events:
+            return f"No meetings scheduled for {time_range}."
+
+        summary = []
+        for event in events[:5]:  # cap at 5 to keep token cost low
+            start_time = event["start"].get("dateTime", event["start"].get("date"))
+            summary.append(f"{event.get('summary', 'Untitled')} at {start_time}")
+
+        return f"{len(events)} meeting(s) {time_range}: " + " | ".join(summary)
+
+    except Exception as e:
+        return f"Couldn't fetch calendar right now ({e})."
+
 
 @tool
 def schedule_meeting(title: str, start_time: str, attendees: str = ""):
     """Schedule a meeting with title, start time, and attendees."""
-    return f"[STUB] '{title}' scheduled at {start_time} with {attendees or 'none'}."
+    try:
+        creds = get_google_credentials()
+        service = build("calendar", "v3", credentials=creds)
+
+        # NOTE: start_time needs to be in ISO format for this to work reliably.
+        # Real production version would parse natural language dates here —
+        # for now we expect something like "2026-08-15T15:00:00"
+        end_time_dt = datetime.fromisoformat(start_time) + timedelta(hours=1)
+
+        event = {
+            "summary": title,
+            "start": {"dateTime": start_time, "timeZone": "Asia/Kolkata"},
+            "end": {"dateTime": end_time_dt.isoformat(), "timeZone": "Asia/Kolkata"},
+        }
+
+        if attendees:
+            event["attendees"] = [{"email": e.strip()} for e in attendees.split(",")]
+
+        created_event = service.events().insert(calendarId="primary", body=event).execute()
+
+        return f"'{title}' scheduled successfully. Link: {created_event.get('htmlLink')}"
+
+    except Exception as e:
+        return f"Couldn't schedule the meeting ({e})."
 
 @tool
 def send_email(to: str, subject: str, body: str):
@@ -40,9 +101,7 @@ def daily_summary():
     return "[STUB] 2 meetings, 3 unread emails, no urgent deadlines."
 
 
-# =========================================================
 # INFORMATION TOOLS (real, live data)
-# =========================================================
 
 @tool
 def get_weather(city: str):
@@ -91,9 +150,7 @@ def get_news(topic: str = "general"):
         return f"Couldn't fetch news right now ({e})."
 
 
-# =========================================================
 # SYSTEM TOOLS (local machine control)
-# =========================================================
 
 APP_MAP = {
     "chrome": "chrome",
@@ -121,9 +178,7 @@ def open_app(app_name: str):
         return f"Couldn't open {app_name} ({e})."
 
 
-# =========================================================
 # BUNDLE — everything Leo can do
-# =========================================================
 ALL_TOOLS = [
     check_calendar, schedule_meeting, send_email, fetch_unread_emails, daily_summary,
     get_weather, web_search, get_news, open_app,
