@@ -5,7 +5,9 @@
 # hitting the free tier's per-minute token limit.
 
 import os
+import base64
 import requests
+from email.mime.text import MIMEText
 from langchain_core.tools import tool
 from ddgs import DDGS
 import feedparser
@@ -13,7 +15,9 @@ from datetime import datetime, timedelta
 from googleapiclient.discovery import build
 from core.google_auth import get_google_credentials
 
-# PRODUCTIVITY TOOLS (stubs — real Google API comes later)
+# =========================================================
+# PRODUCTIVITY TOOLS — real Google Calendar + Gmail integration
+# =========================================================
 
 @tool
 def check_calendar(time_range: str = "today"):
@@ -22,13 +26,12 @@ def check_calendar(time_range: str = "today"):
         creds = get_google_credentials()
         service = build("calendar", "v3", credentials=creds)
 
-        # Figure out the date window based on what the user asked for
         now = datetime.utcnow()
         if "tomorrow" in time_range.lower():
             start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         elif "week" in time_range.lower():
             start = now
-        else:  # default to "today"
+        else:
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         end = start + timedelta(days=7 if "week" in time_range.lower() else 1)
@@ -47,7 +50,7 @@ def check_calendar(time_range: str = "today"):
             return f"No meetings scheduled for {time_range}."
 
         summary = []
-        for event in events[:5]:  # cap at 5 to keep token cost low
+        for event in events[:5]:
             start_time = event["start"].get("dateTime", event["start"].get("date"))
             summary.append(f"{event.get('summary', 'Untitled')} at {start_time}")
 
@@ -64,9 +67,6 @@ def schedule_meeting(title: str, start_time: str, attendees: str = ""):
         creds = get_google_credentials()
         service = build("calendar", "v3", credentials=creds)
 
-        # NOTE: start_time needs to be in ISO format for this to work reliably.
-        # Real production version would parse natural language dates here —
-        # for now we expect something like "2026-08-15T15:00:00"
         end_time_dt = datetime.fromisoformat(start_time) + timedelta(hours=1)
 
         event = {
@@ -85,23 +85,74 @@ def schedule_meeting(title: str, start_time: str, attendees: str = ""):
     except Exception as e:
         return f"Couldn't schedule the meeting ({e})."
 
+
 @tool
 def send_email(to: str, subject: str, body: str):
     """Send an email with recipient, subject, and body."""
-    return f"[STUB] Email sent to {to} — '{subject}'."
+    try:
+        creds = get_google_credentials()
+        service = build("gmail", "v1", credentials=creds)
+
+        message = MIMEText(body)
+        message["to"] = to
+        message["subject"] = subject
+        raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+        service.users().messages().send(
+            userId="me", body={"raw": raw_message}
+        ).execute()
+
+        return f"Email sent to {to} — '{subject}'."
+
+    except Exception as e:
+        return f"Couldn't send the email ({e})."
+
 
 @tool
 def fetch_unread_emails():
     """Fetch and summarize unread emails."""
-    return "[STUB] 3 unread: 1 HR policy update, 2 newsletters."
+    try:
+        creds = get_google_credentials()
+        service = build("gmail", "v1", credentials=creds)
+
+        results = service.users().messages().list(
+            userId="me", labelIds=["UNREAD", "INBOX"], maxResults=5
+        ).execute()
+
+        messages = results.get("messages", [])
+
+        if not messages:
+            return "No unread emails."
+
+        summaries = []
+        for msg in messages:
+            msg_data = service.users().messages().get(
+                userId="me", id=msg["id"], format="metadata",
+                metadataHeaders=["Subject", "From"]
+            ).execute()
+
+            headers = {h["name"]: h["value"] for h in msg_data["payload"]["headers"]}
+            subject = headers.get("Subject", "No subject")
+            sender = headers.get("From", "Unknown sender")
+            summaries.append(f"'{subject}' from {sender}")
+
+        return f"{len(messages)} unread email(s): " + " | ".join(summaries)
+
+    except Exception as e:
+        return f"Couldn't fetch emails right now ({e})."
+
 
 @tool
 def daily_summary():
     """Summarize the day — calendar + emails."""
-    return "[STUB] 2 meetings, 3 unread emails, no urgent deadlines."
+    calendar_info = check_calendar.invoke({"time_range": "today"})
+    email_info = fetch_unread_emails.invoke({})
+    return f"Today: {calendar_info} Also, {email_info}"
 
 
+# =========================================================
 # INFORMATION TOOLS (real, live data)
+# =========================================================
 
 @tool
 def get_weather(city: str):
@@ -150,7 +201,9 @@ def get_news(topic: str = "general"):
         return f"Couldn't fetch news right now ({e})."
 
 
+# =========================================================
 # SYSTEM TOOLS (local machine control)
+# =========================================================
 
 APP_MAP = {
     "chrome": "chrome",
@@ -178,7 +231,9 @@ def open_app(app_name: str):
         return f"Couldn't open {app_name} ({e})."
 
 
+# =========================================================
 # BUNDLE — everything Leo can do
+# =========================================================
 ALL_TOOLS = [
     check_calendar, schedule_meeting, send_email, fetch_unread_emails, daily_summary,
     get_weather, web_search, get_news, open_app,
