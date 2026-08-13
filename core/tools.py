@@ -14,6 +14,7 @@ import feedparser
 from datetime import datetime, timedelta
 from googleapiclient.discovery import build
 from core.google_auth import get_google_credentials
+from core.memory import save_fact, get_all_facts
 
 # =========================================================
 # PRODUCTIVITY TOOLS — real Google Calendar + Gmail integration
@@ -151,6 +152,17 @@ def daily_summary():
 
 
 # =========================================================
+# MEMORY TOOL — remember facts about the user across sessions
+# =========================================================
+
+@tool
+def remember_fact(fact: str):
+    """Save a fact about the user to remember later, e.g. their preferences."""
+    save_fact(fact)
+    return f"Got it, I'll remember: {fact}"
+
+
+# =========================================================
 # INFORMATION TOOLS (real, live data)
 # =========================================================
 
@@ -236,5 +248,5 @@ def open_app(app_name: str):
 # =========================================================
 ALL_TOOLS = [
     check_calendar, schedule_meeting, send_email, fetch_unread_emails, daily_summary,
-    get_weather, web_search, get_news, open_app,
+    get_weather, web_search, get_news, open_app, remember_fact,
 ]
