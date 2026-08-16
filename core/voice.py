@@ -19,19 +19,28 @@ print("[voice] Loading speech recognition model (first run may take a moment)...
 _stt_model = WhisperModel("small", compute_type="int8")
 print("[voice] Speech recognition ready.")
 
-LEO_VOICE = "en-US-GuyNeural"
+LEO_VOICE = "en-US-AndrewNeural"
 SAMPLE_RATE = 16000
 
-# Explicitly use your OPPO earbuds' mic (device 2) — the laptop's built-in
-# mic wasn't picking up your voice reliably.
-sd.default.device = (2, None)
+# We DON'T hardcode a mic device index here — every laptop has different
+# device numbers, and hardcoding one (like we did before) breaks Leo on any
+# machine other than the one it was hardcoded for. Instead, we let
+# sounddevice use whatever the OS has set as the default input device.
+# If you personally want to force a specific mic, set the LEO_MIC_INDEX
+# environment variable to that device's index (check with:
+# python -c "import sounddevice as sd; print(sd.query_devices())")
+_mic_override = os.getenv("LEO_MIC_INDEX")
+if _mic_override is not None:
+    sd.default.device = (int(_mic_override), None)
+    print(f"[voice] Using manually configured mic device index {_mic_override}")
 
-# Whisper sometimes mishears less-common words (like Indian city names).
-# This prompt "hints" Whisper toward expected vocabulary, which measurably
-# improves accuracy on names it wasn't trained heavily on.
+# Whisper sometimes mishears less-common words (like Indian city names) or
+# short activation phrases. This prompt "hints" Whisper toward expected
+# vocabulary, which measurably improves accuracy.
 WHISPER_HINT = (
-    "The user may mention Indian cities like Indore, Mumbai, Delhi, Bangalore, "
-    "Pune, Bhopal, Jaipur, and ask about weather, calendar, email, or news."
+    "The user may say 'Hey Leo' to activate the assistant, or mention Indian "
+    "cities like Indore, Mumbai, Delhi, Bangalore, Pune, Bhopal, Jaipur, and "
+    "ask about weather, calendar, email, or news."
 )
 
 # Backup safety net: common mishearings we've seen in testing, corrected directly.
@@ -40,6 +49,8 @@ CORRECTIONS = {
     "the north": "Indore",
     "indoor": "Indore",
     "in door": "Indore",
+    "alligate": "Hey Leo",
+    "elegate": "Hey Leo",
 }
 
 
@@ -52,7 +63,7 @@ def _apply_corrections(text: str) -> str:
     return fixed
 
 
-def listen(duration=6):
+def listen(duration=4):
     """Records mic audio, returns transcribed (and corrected) text, or "" if silence."""
     print(f"\n[Get ready...]")
     time.sleep(0.5)

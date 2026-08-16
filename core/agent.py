@@ -15,7 +15,8 @@ from core.memory import init_db, save_message, load_recent_history, save_fact, g
 SYSTEM_PROMPT = (
     "You are Leo, a voice assistant. Always use tools for weather, search, news, "
     "calendar, email, or apps — never guess real data. After a tool runs, state the "
-    "actual result naturally (e.g. 'It's 27°C in Indore'), never mention tool names."
+    "actual result naturally (e.g. 'It's 27°C in Indore'), never mention tool names. "
+    "Keep replies short and conversational — 1 to 3 sentences unless more detail is asked for."
 )
 
 SIMPLE_GREETINGS = ("hello", "hi", "hey", "how are you", "good morning", "good evening")
@@ -29,7 +30,9 @@ REMEMBER_TRIGGERS = ("remember that ", "remember ", "please remember that ", "pl
 def build_leo():
     """Builds and compiles Leo's LangGraph brain. Returns a runnable graph."""
 
-    llm = ChatOllama(model="llama3.2", temperature=0)
+    # num_predict caps how many tokens the model generates per reply — keeps
+    # answers short and responses faster, especially useful on CPU-only machines.
+    llm = ChatOllama(model="llama3.2", temperature=0, num_predict=150)
     llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
     def brain_node(state: MessagesState):
@@ -51,6 +54,12 @@ def build_leo():
     graph.add_edge("tools", "brain")
 
     return graph.compile()
+
+
+def is_greeting(text: str) -> bool:
+    """Matches greetings even with extra words, e.g. 'Hello, Leo' or 'Hey there'."""
+    cleaned = text.lower().strip().rstrip(".!?,")
+    return any(cleaned.startswith(g) for g in SIMPLE_GREETINGS)
 
 
 def try_handle_remember(user_input: str):
@@ -81,12 +90,10 @@ if __name__ == "__main__":
         if user_input.lower() == "quit":
             break
 
-        cleaned = user_input.lower().strip()
-        if cleaned in SIMPLE_GREETINGS:
+        if is_greeting(user_input):
             print("Leo: Hey! How can I help you today?\n")
             continue
 
-        # Handle "remember X" directly — never send this to the LLM/tools
         remember_reply = try_handle_remember(user_input)
         if remember_reply:
             print(f"Leo: {remember_reply}\n")
