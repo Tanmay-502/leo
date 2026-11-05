@@ -1,70 +1,74 @@
-# core/agent.py
-# Leo's BRAIN — LangGraph state graph, running on Ollama (local, offline, free).
-# No internet needed to think, no API key, no rate limits — runs on this machine.
-# Persistent memory via SQLite — Leo remembers past conversations and saved
-# facts even after you close and reopen the program.
+"""Leo's bounded LangGraph/Ollama conversation engine."""
 
-from langgraph.graph import StateGraph, MessagesState, END, START
-from langgraph.prebuilt import ToolNode, tools_condition
-from langchain_ollama import ChatOllama
-from langchain_core.messages import SystemMessage
+from __future__ import annotations
 
-from core.tools import ALL_TOOLS
-from core.memory import init_db, save_message, load_recent_history, save_fact, get_all_facts
+from typing import Any
+
+from core.config import settings
+from core.memory import get_all_facts, init_db, save_fact, save_message, load_recent_history
 
 SYSTEM_PROMPT = (
-    "You are Leo, a voice assistant. Always use tools for weather, search, news, "
-    "calendar, email, or apps — never guess real data. After a tool runs, state the "
-    "actual result naturally (e.g. 'It's 27°C in Indore'), never mention tool names. "
-    "Keep replies short and conversational — 1 to 3 sentences unless more detail is asked for."
+    "You are Leo, a concise personal voice assistant. Use tools for live weather, "
+    "search, news, calendar, email, and apps. Never invent live data or claim a "
+    "failed action succeeded. Keep replies to 1-3 sentences unless asked for detail."
 )
-
 SIMPLE_GREETINGS = ("hello", "hi", "hey", "how are you", "good morning", "good evening")
-
-# Phrases that mean "remember this for later" — handled directly in code,
-# not left to the small model's judgment, since it kept confusing this with
-# sending an email. Same trick that fixed the greeting misfires earlier.
 REMEMBER_TRIGGERS = ("remember that ", "remember ", "please remember that ", "please remember ")
 
 
 def build_leo():
-    """Builds and compiles Leo's LangGraph brain. Returns a runnable graph."""
+    """Build and compile the LangGraph brain, or raise an actionable setup error."""
+    try:
+        from langchain_core.messages import SystemMessage
+        from langchain_ollama import ChatOllama
+        from langgraph.graph import END, START, MessagesState, StateGraph
+        from langgraph.prebuilt import ToolNode, tools_condition
+        from core.tools import ALL_TOOLS
+    except ImportError as exc:
+        raise RuntimeError(
+            "Leo's AI dependencies are missing. Run pip install -r requirements.txt."
+        ) from exc
 
-    # num_predict caps how many tokens the model generates per reply — keeps
-    # answers short and responses faster, especially useful on CPU-only machines.
-    llm = ChatOllama(model="llama3.2", temperature=0, num_predict=150)
-    llm_with_tools = llm.bind_tools(ALL_TOOLS)
+    try:
+        llm = ChatOllama(
+            model=settings.model, base_url=settings.ollama_url,
+            temperature=0, num_predict=150,
+        )
+        llm_with_tools = llm.bind_tools(ALL_TOOLS)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Unable to initialize Ollama model '{settings.model}'. "
+            "Install Ollama, start it, and run `ollama pull "
+            f"{settings.model}`."
+        ) from exc
 
-    def brain_node(state: MessagesState):
+    def brain_node(state: MessagesState) -> dict[str, list[Any]]:
         facts = get_all_facts()
-        facts_text = ""
-        if facts:
-            facts_text = " Known facts about the user: " + "; ".join(facts[:10])
-
-        messages = [SystemMessage(content=SYSTEM_PROMPT + facts_text)] + state["messages"]
-        response = llm_with_tools.invoke(messages)
+        fact_text = f" Known facts: {'; '.join(facts[:10])}" if facts else ""
+        messages = [SystemMessage(content=SYSTEM_PROMPT + fact_text)] + state["messages"][-settings.history_limit:]
+        try:
+            response = llm_with_tools.invoke(messages)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Ollama could not generate a response. Is '{settings.model}' available?"
+            ) from exc
         return {"messages": [response]}
 
     graph = StateGraph(MessagesState)
     graph.add_node("brain", brain_node)
     graph.add_node("tools", ToolNode(ALL_TOOLS))
-
     graph.add_edge(START, "brain")
     graph.add_conditional_edges("brain", tools_condition)
     graph.add_edge("tools", "brain")
-
     return graph.compile()
 
 
 def is_greeting(text: str) -> bool:
-    """Matches greetings even with extra words, e.g. 'Hello, Leo' or 'Hey there'."""
     cleaned = text.lower().strip().rstrip(".!?,")
-    return any(cleaned.startswith(g) for g in SIMPLE_GREETINGS)
+    return any(cleaned.startswith(greeting) for greeting in SIMPLE_GREETINGS)
 
 
-def try_handle_remember(user_input: str):
-    """Checks if the message is a 'remember X' request and handles it directly,
-    bypassing the LLM entirely. Returns a reply string if handled, else None."""
+def try_handle_remember(user_input: str) -> str | None:
     lowered = user_input.lower().strip()
     for trigger in REMEMBER_TRIGGERS:
         if lowered.startswith(trigger):
@@ -75,42 +79,35 @@ def try_handle_remember(user_input: str):
     return None
 
 
-if __name__ == "__main__":
+def clean_response(content: Any) -> str:
+    text = content if isinstance(content, str) else str(content or "")
+    if not text.strip() or text.strip().startswith("{"):
+        return "Sorry, I didn't catch that clearly. Could you repeat it?"
+    return text.strip()
+
+
+def run_text_mode() -> None:
     init_db()
     leo = build_leo()
-
-    print("Leo is online (offline via Ollama, llama3.2). Type 'quit' to exit.\n")
-
-    conversation = load_recent_history(limit=10)
-    if conversation:
-        print(f"[Loaded {len(conversation)} previous messages from memory]\n")
-
+    conversation = load_recent_history()
+    print(f"Leo is online using Ollama model {settings.model}. Type 'quit' to exit.\n")
     while True:
-        user_input = input("You: ")
-        if user_input.lower() == "quit":
+        user_input = input("You: ").strip()
+        if user_input.lower() in {"quit", "exit"}:
             break
-
         if is_greeting(user_input):
-            print("Leo: Hey! How can I help you today?\n")
-            continue
+            reply = "Hey! How can I help you today?"
+        else:
+            reply = try_handle_remember(user_input)
+            if not reply:
+                save_message("user", user_input)
+                conversation.append({"role": "user", "content": user_input})
+                result = leo.invoke({"messages": conversation[-settings.history_limit:]})
+                conversation = result["messages"][-settings.history_limit:]
+                reply = clean_response(conversation[-1].content)
+        save_message("assistant", reply)
+        print(f"Leo: {reply}\n")
 
-        remember_reply = try_handle_remember(user_input)
-        if remember_reply:
-            print(f"Leo: {remember_reply}\n")
-            save_message("user", user_input)
-            save_message("assistant", remember_reply)
-            continue
 
-        conversation.append({"role": "user", "content": user_input})
-        save_message("user", user_input)
-
-        result = leo.invoke({"messages": conversation})
-        conversation = result["messages"]
-
-        ai_reply = conversation[-1].content
-        if not ai_reply or not ai_reply.strip() or ai_reply.strip().startswith("{"):
-            ai_reply = "Sorry, I didn't catch that clearly. Could you repeat it?"
-
-        save_message("assistant", ai_reply)
-
-        print(f"Leo: {ai_reply}\n")
+if __name__ == "__main__":
+    run_text_mode()

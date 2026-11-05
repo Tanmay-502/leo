@@ -5,3 +5,8 @@ __pycache__/
 credentials.json
 token.json
 leo.db
+*.sqlite3
+.pytest_cache/
+build/
+dist/
+*.spec

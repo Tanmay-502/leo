@@ -15,6 +15,7 @@ COLORS = {
     "thinking": "#F59E0B",
     "speaking": "#10B981",
     "idle": "#4B5563",
+    "error": "#EF4444",
 }
 
 LABELS = {
@@ -22,6 +23,7 @@ LABELS = {
     "thinking": "Thinking",
     "speaking": "Speaking",
     "idle": "Leo",
+    "error": "Error",
 }
 
 BG = "#0F0F14"

@@ -1,122 +1,98 @@
-# core/voice.py
-# Leo's ears (listen) and mouth (speak).
-# STT (listen) is 100% offline — faster-whisper runs locally.
-# TTS (speak) needs internet — edge-tts streams from Microsoft's free service.
-# That's the one piece of Leo that can't be fully offline; if you're on a bad
-# connection, speak() fails gracefully and Leo keeps working in text.
+"""Optional speech recognition and pluggable text-to-speech providers."""
+
+from __future__ import annotations
 
 import asyncio
-import tempfile
 import os
-import time
-import numpy as np
-import sounddevice as sd
-import soundfile as sf
-from faster_whisper import WhisperModel
-import edge_tts
+import tempfile
+from abc import ABC, abstractmethod
+from typing import Any
 
-print("[voice] Loading speech recognition model (first run may take a moment)...")
-_stt_model = WhisperModel("small", compute_type="int8")
-print("[voice] Speech recognition ready.")
+from core.config import settings
 
-LEO_VOICE = "en-US-AndrewNeural"
 SAMPLE_RATE = 16000
-
-# We DON'T hardcode a mic device index here — every laptop has different
-# device numbers, and hardcoding one (like we did before) breaks Leo on any
-# machine other than the one it was hardcoded for. Instead, we let
-# sounddevice use whatever the OS has set as the default input device.
-# If you personally want to force a specific mic, set the LEO_MIC_INDEX
-# environment variable to that device's index (check with:
-# python -c "import sounddevice as sd; print(sd.query_devices())")
-_mic_override = os.getenv("LEO_MIC_INDEX")
-if _mic_override is not None:
-    sd.default.device = (int(_mic_override), None)
-    print(f"[voice] Using manually configured mic device index {_mic_override}")
-
-# Whisper sometimes mishears less-common words (like Indian city names) or
-# short activation phrases. This prompt "hints" Whisper toward expected
-# vocabulary, which measurably improves accuracy.
-WHISPER_HINT = (
-    "The user may say 'Hey Leo' to activate the assistant, or mention Indian "
-    "cities like Indore, Mumbai, Delhi, Bangalore, Pune, Bhopal, Jaipur, and "
-    "ask about weather, calendar, email, or news."
-)
-
-# Backup safety net: common mishearings we've seen in testing, corrected directly.
-# Add more pairs here as you notice new mistakes during use.
-CORRECTIONS = {
-    "the north": "Indore",
-    "indoor": "Indore",
-    "in door": "Indore",
-    "alligate": "Hey Leo",
-    "elegate": "Hey Leo",
-}
+WHISPER_HINT = "The user may say Hey Leo, mention Indian cities, weather, calendar, email, or news."
+CORRECTIONS = {"the north": "Indore", "indoor": "Indore", "in door": "Indore"}
 
 
 def _apply_corrections(text: str) -> str:
-    """Fixes known common mishearings before Leo's brain ever sees the text."""
     fixed = text
     for wrong, right in CORRECTIONS.items():
-        if wrong in fixed.lower():
-            fixed = fixed.lower().replace(wrong, right)
+        fixed = fixed.lower().replace(wrong, right)
     return fixed
 
 
-def listen(duration=4):
-    """Records mic audio, returns transcribed (and corrected) text, or "" if silence."""
-    print(f"\n[Get ready...]")
-    time.sleep(0.5)
-    print(f"[Listening for {duration} seconds — speak now]")
-
-    audio = sd.rec(int(duration * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype="float32")
-    sd.wait()
-    audio = audio.flatten()
-
-    volume = np.sqrt(np.mean(audio**2))
-    SILENCE_THRESHOLD = 0.01
-
-    if volume < SILENCE_THRESHOLD:
-        print("[Silence detected — skipping]")
-        return ""
-
-    segments, _ = _stt_model.transcribe(audio, language="en", initial_prompt=WHISPER_HINT)
-    text = " ".join(segment.text for segment in segments).strip()
-    text = _apply_corrections(text)
-
-    print(f"[You said]: {text}")
-    return text
-
-
-def speak(text: str):
-    """Speaks `text` aloud via edge-tts. Fails silently (prints a warning)
-    if there's no internet, instead of crashing the whole program."""
-    if not text:
-        return
-
-    async def _generate_and_play():
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_file:
-            tmp_path = tmp_file.name
-
-        communicate = edge_tts.Communicate(text, LEO_VOICE)
-        await communicate.save(tmp_path)
-
-        data, samplerate = sf.read(tmp_path)
-        sd.play(data, samplerate)
-        sd.wait()
-
-        os.remove(tmp_path)
-
+def listen(duration: float = 4) -> str:
+    """Record and transcribe audio, with silence and device errors surfaced."""
     try:
-        asyncio.run(_generate_and_play())
-    except Exception as e:
-        print(f"[voice] Couldn't speak aloud (likely no internet): {e}")
+        import numpy as np
+        import sounddevice as sd
+        from faster_whisper import WhisperModel
+    except ImportError as exc:
+        raise RuntimeError("Voice input dependencies are missing. Install requirements.txt.") from exc
+    if duration <= 0:
+        raise ValueError("duration must be positive")
+    if settings.mic_index is not None:
+        sd.default.device = (settings.mic_index, None)
+    try:
+        audio = sd.rec(int(duration * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype="float32")
+        sd.wait()
+    except Exception as exc:
+        raise RuntimeError("Microphone recording failed; check the selected input device.") from exc
+    samples = audio.flatten()
+    if float(np.sqrt(np.mean(samples ** 2))) < 0.01:
+        return ""
+    model = WhisperModel(settings.whisper_model, compute_type="int8")
+    segments, _ = model.transcribe(samples, language="en", initial_prompt=WHISPER_HINT)
+    return _apply_corrections(" ".join(segment.text for segment in segments).strip())
 
 
-if __name__ == "__main__":
-    print("Testing Leo's voice system.\n")
-    text = listen(duration=5)
-    if text:
-        speak(f"You said: {text}")
-    else:
-        print("[No speech detected]")
+class TTSProvider(ABC):
+    @abstractmethod
+    def speak(self, text: str) -> None:
+        """Speak text or raise a clear provider error."""
+
+
+class OfflineTTS(TTSProvider):
+    def speak(self, text: str) -> None:
+        try:
+            import pyttsx3
+            engine = pyttsx3.init()
+            engine.setProperty("rate", 175)
+            engine.say(text)
+            engine.runAndWait()
+        except ImportError as exc:
+            raise RuntimeError("Offline TTS requires pyttsx3; install requirements.txt.") from exc
+
+
+class EdgeTTS(TTSProvider):
+    def speak(self, text: str) -> None:
+        try:
+            import edge_tts
+            import sounddevice as sd
+            import soundfile as sf
+        except ImportError as exc:
+            raise RuntimeError("Edge TTS dependencies are missing.") from exc
+
+        async def generate(path: str) -> None:
+            await edge_tts.Communicate(text, settings.tts_voice, rate=settings.tts_rate).save(path)
+
+        fd, path = tempfile.mkstemp(suffix=".mp3")
+        os.close(fd)
+        try:
+            asyncio.run(generate(path))
+            data, samplerate = sf.read(path)
+            sd.play(data, samplerate)
+            sd.wait()
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+
+def get_tts_provider() -> TTSProvider:
+    return EdgeTTS() if settings.tts_provider.lower() == "edge" else OfflineTTS()
+
+
+def speak(text: str, provider: TTSProvider | None = None) -> None:
+    if text.strip():
+        (provider or get_tts_provider()).speak(text)
