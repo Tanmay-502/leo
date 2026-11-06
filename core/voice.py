@@ -6,7 +6,7 @@ import asyncio
 import os
 import tempfile
 from abc import ABC, abstractmethod
-from typing import Any
+from collections.abc import Callable
 
 from core.config import settings
 
@@ -22,7 +22,7 @@ def _apply_corrections(text: str) -> str:
     return fixed
 
 
-def listen(duration: float = 4) -> str:
+def listen(duration: float = 4, on_transcribing: Callable[[], None] | None = None) -> str:
     """Record and transcribe audio, with silence and device errors surfaced."""
     try:
         import numpy as np
@@ -42,6 +42,8 @@ def listen(duration: float = 4) -> str:
     samples = audio.flatten()
     if float(np.sqrt(np.mean(samples ** 2))) < 0.01:
         return ""
+    if on_transcribing is not None:
+        on_transcribing()
     model = WhisperModel(settings.whisper_model, compute_type="int8")
     segments, _ = model.transcribe(samples, language="en", initial_prompt=WHISPER_HINT)
     return _apply_corrections(" ".join(segment.text for segment in segments).strip())

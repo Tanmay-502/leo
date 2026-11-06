@@ -18,6 +18,8 @@ Internet is required for Google, weather, search, news, and Edge TTS. Ollama inf
 
 Windows 10/11, Python 3.10+, and at least 8 GB RAM are recommended.
 
+Create an isolated environment and install the complete tested dependency set:
+
 ```powershell
 git clone https://github.com/Tanmay-502/leo.git
 cd leo
@@ -26,6 +28,8 @@ venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
 ```
+
+The required core runtime is `langchain-core`, `langchain-ollama`, `langgraph`, `ollama`, `python-dotenv`, `requests`, and `numpy`. Voice input additionally uses `faster-whisper`, `sounddevice`, and `soundfile`; offline speech uses `pyttsx3`; optional online speech uses `edge-tts`; Google Calendar/Gmail use the `google-api-*`, `google-auth*`, and `google-auth-oauthlib` packages; search and news use `ddgs` and `feedparser`. All are listed in `requirements.txt`. The full install is recommended because it enables complete application testing, while the app still reports actionable messages when optional integrations are unavailable.
 
 Install [Ollama](https://ollama.com), start it, and download the configured model:
 
@@ -36,9 +40,26 @@ ollama pull llama3.2
 Run text or voice mode:
 
 ```powershell
-python -m core.agent
-python -m core.voice_loop
+.\venv\Scripts\python.exe -m core.agent
+.\venv\Scripts\python.exe -m core.voice_loop
+.\run_leo.bat
 ```
+
+`run_leo.bat` resolves the project directory, verifies the project-local
+virtual environment and LangGraph/Ollama imports, then opens the full desktop
+chat interface. Running `.\venv\Scripts\python.exe -m core.ui` is the equivalent
+direct command. `core.voice_loop` remains the terminal-driven voice mode with a
+compact floating status popup. The desktop UI uses the real
+LangGraph/Ollama graph, SQLite history, memory tools, microphone callback, and
+TTS provider; it does not use a separate mock chat backend.
+
+### Desktop UI shortcuts
+
+- **Enter** sends the current message.
+- **Shift+Enter** inserts a newline.
+- **●** starts a background microphone capture.
+- **New conversation** clears SQLite conversation history after confirmation.
+- **Memories** lists, adds, and deletes explicit saved facts.
 
 ## Configuration
 
@@ -55,7 +76,7 @@ python -m pytest -q
 python -m compileall -q core
 ```
 
-Tests use mocks and temporary databases; they do not need a microphone, Google account, Ollama server, or live internet. If Ollama is unavailable, install it, start the service, and run `ollama pull <model>`. If voice input fails, verify the microphone index and Windows permission. Offline speech output requires the `pyttsx3` dependency and a Windows speech engine; Edge TTS requires internet.
+Tests use mocks and temporary databases; they do not need a microphone, Google account, Ollama server, or live internet. If Ollama is unavailable, install it, start the service, and run `ollama pull <model>`. Verify the Python adapter with `.\venv\Scripts\python.exe -c "import langchain_ollama, langgraph"`. If voice input fails, verify the microphone index and Windows permission. Offline speech output requires the `pyttsx3` dependency and a Windows speech engine; Edge TTS requires internet and may be unavailable when the provider rejects a request. Runtime exceptions are written to the local, ignored `leo.log` file without recording environment variables or credentials.
 
 ## Packaging and privacy
 

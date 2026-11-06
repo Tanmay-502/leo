@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import traceback
+from pathlib import Path
 from typing import Any
 
 from core.config import settings
@@ -16,17 +19,46 @@ SIMPLE_GREETINGS = ("hello", "hi", "hey", "how are you", "good morning", "good e
 REMEMBER_TRIGGERS = ("remember that ", "remember ", "please remember that ", "please remember ")
 
 
+def record_diagnostic(context: str, exc: BaseException) -> None:
+    """Write local diagnostics without exposing credentials or environment values."""
+    path = Path(os.getenv("LEO_LOG_PATH", "leo.log")).expanduser()
+    try:
+        with path.open("a", encoding="utf-8") as log:
+            log.write(f"\n[{context}]\n")
+            traceback.print_exception(type(exc), exc, exc.__traceback__, file=log)
+    except OSError:
+        pass
+
+
 def build_leo():
     """Build and compile the LangGraph brain, or raise an actionable setup error."""
+    required_packages = (
+        ("langchain_core", "langchain-core"),
+        ("langchain_ollama", "langchain-ollama"),
+        ("langgraph", "langgraph"),
+    )
     try:
+        import importlib
         from langchain_core.messages import SystemMessage
         from langchain_ollama import ChatOllama
         from langgraph.graph import END, START, MessagesState, StateGraph
         from langgraph.prebuilt import ToolNode, tools_condition
         from core.tools import ALL_TOOLS
     except ImportError as exc:
+        record_diagnostic("dependency import", exc)
+        missing = next(
+            (package for module, package in required_packages
+             if not _module_available(importlib, module)),
+            None,
+        )
+        if missing:
+            raise RuntimeError(
+                f"Missing Python package '{missing}'. Run "
+                f"'.\\venv\\Scripts\\python.exe -m pip install -r requirements.txt'."
+            ) from exc
         raise RuntimeError(
-            "Leo's AI dependencies are missing. Run pip install -r requirements.txt."
+            "Leo's LangGraph/Ollama integration could not be imported. "
+            "See leo.log for the local traceback."
         ) from exc
 
     try:
@@ -36,10 +68,11 @@ def build_leo():
         )
         llm_with_tools = llm.bind_tools(ALL_TOOLS)
     except Exception as exc:
+        record_diagnostic("Ollama initialization", exc)
         raise RuntimeError(
-            f"Unable to initialize Ollama model '{settings.model}'. "
-            "Install Ollama, start it, and run `ollama pull "
-            f"{settings.model}`."
+            f"LangGraph/Ollama initialization failed for model '{settings.model}': "
+            f"{exc}. Verify Ollama is running at {settings.ollama_url} and that "
+            f"'{settings.model}' is installed."
         ) from exc
 
     def brain_node(state: MessagesState) -> dict[str, list[Any]]:
@@ -49,18 +82,47 @@ def build_leo():
         try:
             response = llm_with_tools.invoke(messages)
         except Exception as exc:
+            record_diagnostic("Ollama request", exc)
+            detail = str(exc)
+            if "connection" in detail.lower() or "connect" in detail.lower():
+                message = (
+                    f"Cannot connect to Ollama at {settings.ollama_url}. "
+                    "Start the Ollama service and try again."
+                )
+            elif "not found" in detail.lower() or "pull" in detail.lower():
+                message = (
+                    f"Ollama model '{settings.model}' is unavailable. "
+                    f"Run `ollama pull {settings.model}` and try again."
+                )
+            else:
+                message = f"Ollama request failed: {detail}"
             raise RuntimeError(
-                f"Ollama could not generate a response. Is '{settings.model}' available?"
+                f"{message} See leo.log for the local traceback."
             ) from exc
         return {"messages": [response]}
 
-    graph = StateGraph(MessagesState)
-    graph.add_node("brain", brain_node)
-    graph.add_node("tools", ToolNode(ALL_TOOLS))
-    graph.add_edge(START, "brain")
-    graph.add_conditional_edges("brain", tools_condition)
-    graph.add_edge("tools", "brain")
-    return graph.compile()
+    try:
+        graph = StateGraph(MessagesState)
+        graph.add_node("brain", brain_node)
+        graph.add_node("tools", ToolNode(ALL_TOOLS))
+        graph.add_edge(START, "brain")
+        graph.add_conditional_edges("brain", tools_condition)
+        graph.add_edge("tools", "brain")
+        return graph.compile()
+    except Exception as exc:
+        record_diagnostic("LangGraph initialization", exc)
+        raise RuntimeError(
+            f"LangGraph initialization failed: {exc}. See leo.log for the "
+            "local traceback."
+        ) from exc
+
+
+def _module_available(importlib: Any, module: str) -> bool:
+    try:
+        importlib.import_module(module)
+    except ImportError:
+        return False
+    return True
 
 
 def is_greeting(text: str) -> bool:

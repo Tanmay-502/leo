@@ -14,12 +14,12 @@ def test_weather_failure_is_honest(monkeypatch):
     def fail(*args, **kwargs):
         raise tools.requests.Timeout()
     monkeypatch.setattr(tools.requests, "get", fail)
-    assert "couldn't fetch weather" in tools.get_weather("Indore").lower()
+    assert "couldn't fetch weather" in tools.get_weather.invoke({"city": "Indore"}).lower()
 
 
 def test_open_app_uses_safe_subprocess(monkeypatch):
     calls = []
     monkeypatch.setattr(subprocess, "Popen", lambda command, shell: calls.append((command, shell)))
-    assert "Opening" in tools.open_app("Notepad")
+    assert "Opening" in tools.open_app.invoke({"app_name": "Notepad"})
     assert calls == [(["notepad"], False)]
-    assert "don't know" in tools.open_app("cmd.exe")
+    assert "don't know" in tools.open_app.invoke({"app_name": "cmd.exe"})

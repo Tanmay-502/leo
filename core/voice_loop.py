@@ -29,7 +29,10 @@ def run_voice_loop():
     while True:
         set_state("listening", "")
         try:
-            user_input = listen(duration=4)
+            user_input = listen(
+                duration=4,
+                on_transcribing=lambda: set_state("transcribing", ""),
+            )
         except RuntimeError as exc:
             set_state("error", str(exc))
             print(f"[voice] {exc}")

@@ -10,3 +10,4 @@ leo.db
 build/
 dist/
 *.spec
+*.log
